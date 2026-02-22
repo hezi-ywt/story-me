@@ -115,6 +115,50 @@ test("local ui api supports init, create, search, save and upload ingest flows",
     const afterSave = await readFile(assetDocPath, "utf8");
     assert.match(afterSave, /# saved/);
 
+    const docIngest = await requestJson("/api/document/ingest", {
+      method: "POST",
+      body: {
+        projectRoot: dir,
+        docPath: assetDocPath,
+        files: [
+          {
+            name: "hero.png",
+            base64: Buffer.from("fake-image-data").toString("base64"),
+          },
+          {
+            name: "voice.mp3",
+            base64: Buffer.from("fake-audio-data").toString("base64"),
+          },
+          {
+            name: "clip.mp4",
+            base64: Buffer.from("fake-video-data").toString("base64"),
+          },
+          {
+            name: "notes.txt",
+            base64: Buffer.from("scene notes").toString("base64"),
+          },
+        ],
+      },
+    });
+    assert.equal(docIngest.status, 200);
+    assert.equal(docIngest.payload.result.summary.completed, 4);
+    assert.match(docIngest.payload.result.content, /## 媒体资源/);
+    assert.match(docIngest.payload.result.content, /!\[/);
+    assert.match(docIngest.payload.result.content, /<audio controls/);
+    assert.match(docIngest.payload.result.content, /<video controls/);
+    assert.match(docIngest.payload.result.content, /\[📄 /);
+    for (const item of docIngest.payload.result.results) {
+      if (item.status !== "success") {
+        continue;
+      }
+      await stat(item.destinationPath);
+      await stat(`${item.destinationPath}.meta.json`);
+      assert.match(item.destinationPath, /媒体[\\/](images|audio|videos|files)[\\/]/);
+    }
+
+    const afterIngest = await readFile(assetDocPath, "utf8");
+    assert.match(afterIngest, /## 媒体资源/);
+
     const ingest = await requestJson("/api/workspace/ingest-upload", {
       method: "POST",
       body: {

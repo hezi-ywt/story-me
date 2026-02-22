@@ -10,24 +10,30 @@ async function main() {
   const runtime = await startLocalUiServer({ host, port });
   process.stdout.write(`[storyme-ui] running at ${runtime.url}\n`);
 
-  const shutdown = async () => {
+  let shutdownPromise = null;
+  const shutdown = () => {
+    if (shutdownPromise) {
+      return shutdownPromise;
+    }
+
     process.stdout.write("[storyme-ui] shutting down\n");
-    await runtime.close();
-    process.exit(0);
+    shutdownPromise = runtime.close();
+    return shutdownPromise;
   };
 
-  process.on("SIGINT", () => {
-    shutdown().catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(1);
-    });
-  });
-  process.on("SIGTERM", () => {
-    shutdown().catch((error) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(1);
-    });
-  });
+  const onSignal = () => {
+    shutdown()
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((error) => {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exit(1);
+      });
+  };
+
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
 }
 
 main().catch((error) => {

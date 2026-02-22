@@ -119,22 +119,32 @@ async function startLocalUiServer(options = {}) {
   const listeningHost = address && typeof address === "object" ? address.address : host;
   const listeningPort = address && typeof address === "object" ? address.port : port;
   const url = `http://${listeningHost}:${listeningPort}`;
+  let closePromise = null;
 
   return {
     server,
     host: listeningHost,
     port: listeningPort,
     url,
-    close: () =>
-      new Promise((resolveClose, rejectClose) => {
+    close: () => {
+      if (closePromise) {
+        return closePromise;
+      }
+      if (!server.listening) {
+        return Promise.resolve();
+      }
+
+      closePromise = new Promise((resolveClose, rejectClose) => {
         server.close((error) => {
-          if (error) {
+          if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
             rejectClose(error);
             return;
           }
           resolveClose();
         });
-      }),
+      });
+      return closePromise;
+    },
   };
 }
 

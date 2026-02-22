@@ -244,6 +244,21 @@ button:hover {
   line-height: 1.45;
 }
 
+.editor-drop-overlay {
+  position: absolute;
+  inset: 42px 10px 10px;
+  z-index: 2;
+  border: 2px dashed #3f9b6c;
+  border-radius: 12px;
+  background: #edf9f1f0;
+  color: #1e6d47;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  text-align: center;
+}
+
 .meta-line {
   color: var(--muted);
   font-size: 0.84rem;
@@ -266,6 +281,63 @@ button:hover {
 .preview-card h4 {
   margin: 0 0 6px;
   font-size: 0.9rem;
+}
+
+.markdown-preview {
+  border: 1px solid #d9e4d6;
+  border-radius: 12px;
+  background: #fbfdf8;
+  padding: 10px;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3 {
+  margin: 0 0 8px;
+}
+
+.markdown-preview p {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.markdown-preview ul {
+  margin: 6px 0 8px 18px;
+}
+
+.markdown-preview pre {
+  background: #eef4ec;
+  border: 1px solid #d4dfd2;
+  border-radius: 8px;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.markdown-preview blockquote {
+  margin: 8px 0;
+  padding: 4px 10px;
+  border-left: 3px solid #8fbba0;
+  color: #375744;
+  background: #f0f7f1;
+}
+
+.markdown-preview img,
+.markdown-preview video,
+.markdown-preview audio {
+  width: 100%;
+  margin: 6px 0;
+  border-radius: 8px;
+  border: 1px solid #dbe6d6;
+}
+
+.markdown-preview a {
+  color: #2f6f4d;
+}
+
+.preview-section-title {
+  margin-top: 10px;
+  margin-bottom: 6px;
+  font-weight: 600;
 }
 
 .preview-card img,

@@ -6,6 +6,7 @@ const state = {
   selectedPath: "",
   activeDocumentPath: "",
   activeDocumentContent: "",
+  activeScenePreview: null,
   lastAssetId: "",
 };
 
@@ -28,6 +29,8 @@ const els = {
   preview: document.querySelector("#preview-content"),
   dropOverlay: document.querySelector("#drop-overlay"),
   treePanel: document.querySelector(".tree-panel"),
+  editorPanel: document.querySelector(".editor-panel"),
+  editorDropOverlay: document.querySelector("#editor-drop-overlay"),
   toast: document.querySelector("#toast"),
 };
 
@@ -137,6 +140,316 @@ function clearChildren(node) {
 function parseAssetId(markdown) {
   const match = String(markdown).match(/^asset_id:\s*"?([^"\n]+)"?/m);
   return match ? match[1].trim() : "";
+}
+
+function normalizeFsPath(path) {
+  return String(path || "").replace(/\\/g, "/");
+}
+
+function decodeUriSafe(path) {
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
+  }
+}
+
+function isExternalReference(path) {
+  return /^(https?:)?\/\//i.test(path) || path.startsWith("data:") || path.startsWith("blob:");
+}
+
+function resolveDocumentRelativePath(docPath, rawPath) {
+  const source = decodeUriSafe(String(rawPath || "").trim());
+  if (!source) {
+    return "";
+  }
+  if (isExternalReference(source)) {
+    return source;
+  }
+
+  if (source.startsWith("/")) {
+    return normalizeFsPath(source);
+  }
+
+  const baseSegments = normalizeFsPath(docPath).split("/");
+  if (!baseSegments.length) {
+    return normalizeFsPath(source);
+  }
+  baseSegments.pop();
+
+  for (const segment of source.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (baseSegments.length > 1) {
+        baseSegments.pop();
+      }
+      continue;
+    }
+    baseSegments.push(segment);
+  }
+  return baseSegments.join("/");
+}
+
+function localPathForReference(docPath, reference) {
+  const resolved = resolveDocumentRelativePath(docPath, reference);
+  if (!resolved || isExternalReference(resolved)) {
+    return "";
+  }
+  return resolved;
+}
+
+function mediaSourceForReference(docPath, reference) {
+  const resolved = resolveDocumentRelativePath(docPath, reference);
+  if (!resolved) {
+    return "";
+  }
+  if (isExternalReference(resolved)) {
+    return resolved;
+  }
+  return fileQueryPath(resolved);
+}
+
+function createMediaElement(tagName, src) {
+  const el = document.createElement(tagName);
+  el.controls = true;
+  el.src = src;
+  return el;
+}
+
+function appendInlineMarkdown(container, text, docPath) {
+  const source = String(text ?? "");
+  const tokenRegex =
+    /!\[([^\]]*)\]\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|<audio[^>]*src=["']([^"']+)["'][^>]*>\s*<\/audio>|<video[^>]*src=["']([^"']+)["'][^>]*>\s*<\/video>/gi;
+  let cursor = 0;
+  let match;
+
+  while ((match = tokenRegex.exec(source)) !== null) {
+    if (match.index > cursor) {
+      container.appendChild(document.createTextNode(source.slice(cursor, match.index)));
+    }
+
+    if (match[1] !== undefined && match[2] !== undefined) {
+      const img = document.createElement("img");
+      img.alt = match[1];
+      img.loading = "lazy";
+      img.src = mediaSourceForReference(docPath, match[2]);
+      container.appendChild(img);
+    } else if (match[3] !== undefined && match[4] !== undefined) {
+      const anchor = document.createElement("a");
+      anchor.textContent = match[3];
+      const localPath = localPathForReference(docPath, match[4]);
+      if (localPath) {
+        anchor.href = fileQueryPath(localPath);
+        anchor.addEventListener("click", (event) => {
+          event.preventDefault();
+          openPath(localPath)
+            .then(() => renderTree())
+            .catch((error) => showToast(error.message, "error"));
+        });
+      } else {
+        anchor.href = decodeUriSafe(match[4]);
+        anchor.target = "_blank";
+        anchor.rel = "noreferrer";
+      }
+      container.appendChild(anchor);
+    } else if (match[5] !== undefined) {
+      const audioSrc = mediaSourceForReference(docPath, match[5]);
+      if (audioSrc) {
+        container.appendChild(createMediaElement("audio", audioSrc));
+      }
+    } else if (match[6] !== undefined) {
+      const videoSrc = mediaSourceForReference(docPath, match[6]);
+      if (videoSrc) {
+        container.appendChild(createMediaElement("video", videoSrc));
+      }
+    }
+
+    cursor = tokenRegex.lastIndex;
+  }
+
+  if (cursor < source.length) {
+    container.appendChild(document.createTextNode(source.slice(cursor)));
+  }
+}
+
+function renderMarkdownPreview(docPath, markdown) {
+  const wrapper = document.createElement("article");
+  wrapper.className = "markdown-preview";
+
+  const normalized = String(markdown ?? "").replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  let list = null;
+  let inCode = false;
+  let codeLines = [];
+
+  function flushList() {
+    if (!list) {
+      return;
+    }
+    wrapper.appendChild(list);
+    list = null;
+  }
+
+  function flushCode() {
+    if (!inCode) {
+      return;
+    }
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.textContent = codeLines.join("\n");
+    pre.appendChild(code);
+    wrapper.appendChild(pre);
+    inCode = false;
+    codeLines = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = String(rawLine);
+    const trimmed = line.trim();
+
+    if (inCode) {
+      if (trimmed.startsWith("```")) {
+        flushCode();
+      } else {
+        codeLines.push(line);
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      flushList();
+      inCode = true;
+      codeLines = [];
+      continue;
+    }
+
+    if (!trimmed) {
+      flushList();
+      continue;
+    }
+
+    const heading = /^(#{1,3})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      flushList();
+      const level = heading[1].length;
+      const node = document.createElement(`h${level}`);
+      appendInlineMarkdown(node, heading[2], docPath);
+      wrapper.appendChild(node);
+      continue;
+    }
+
+    const listItem = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (listItem) {
+      if (!list) {
+        list = document.createElement("ul");
+      }
+      const li = document.createElement("li");
+      appendInlineMarkdown(li, listItem[1], docPath);
+      list.appendChild(li);
+      continue;
+    }
+
+    const quote = /^>\s?(.*)$/.exec(line);
+    if (quote) {
+      flushList();
+      const blockquote = document.createElement("blockquote");
+      appendInlineMarkdown(blockquote, quote[1], docPath);
+      wrapper.appendChild(blockquote);
+      continue;
+    }
+
+    flushList();
+    const p = document.createElement("p");
+    appendInlineMarkdown(p, line, docPath);
+    wrapper.appendChild(p);
+  }
+
+  flushList();
+  flushCode();
+
+  if (!wrapper.childNodes.length) {
+    const empty = document.createElement("p");
+    empty.className = "placeholder";
+    empty.textContent = "文档为空。";
+    wrapper.appendChild(empty);
+  }
+
+  return wrapper;
+}
+
+function buildScenePreviewEntries(preview) {
+  const entries = [];
+  entries.push(...(preview?.groups?.references || []).map((item) => ({ ...item, group: "参考媒体" })));
+  for (const shot of preview?.groups?.storyboard || []) {
+    for (const ref of shot.references || []) {
+      entries.push({ ...ref, group: `分镜 ${shot.title}` });
+    }
+  }
+  return entries;
+}
+
+function appendSceneMediaPreview(preview) {
+  const entries = buildScenePreviewEntries(preview);
+
+  const sectionLabel = document.createElement("p");
+  sectionLabel.className = "meta-line preview-section-title";
+  sectionLabel.textContent = "场次媒体";
+  els.preview.appendChild(sectionLabel);
+
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "placeholder";
+    empty.textContent = "该场次暂无媒体文件。";
+    els.preview.appendChild(empty);
+    return;
+  }
+
+  for (const entry of entries) {
+    const card = document.createElement("article");
+    card.className = "preview-card";
+
+    const title = document.createElement("h4");
+    title.textContent = `${entry.group} · ${entry.title}`;
+    card.appendChild(title);
+
+    const src = fileQueryPath(entry.path);
+    if (entry.mediaType === "image") {
+      const img = document.createElement("img");
+      img.src = src;
+      card.appendChild(img);
+    } else if (entry.mediaType === "video") {
+      card.appendChild(createMediaElement("video", src));
+    } else if (entry.mediaType === "audio") {
+      card.appendChild(createMediaElement("audio", src));
+    } else {
+      const unsupported = document.createElement("p");
+      unsupported.className = "unsupported";
+      unsupported.textContent = entry.fallbackMessage || "不支持该文件类型。";
+      card.appendChild(unsupported);
+    }
+    els.preview.appendChild(card);
+  }
+}
+
+function renderActiveDocumentPreview() {
+  if (!state.activeDocumentPath) {
+    return;
+  }
+  clearChildren(els.preview);
+  els.preview.appendChild(renderMarkdownPreview(state.activeDocumentPath, els.editor.value));
+  if (state.activeScenePreview) {
+    appendSceneMediaPreview(state.activeScenePreview);
+  }
+}
+
+async function refreshScenePreviewForDocument(docPath) {
+  if (!sceneInfoFromPath(docPath)) {
+    state.activeScenePreview = null;
+    return;
+  }
+  state.activeScenePreview = await api(`/api/preview?sceneDocPath=${encodeURIComponent(docPath)}&limit=40`);
 }
 
 async function loadTree() {
@@ -252,52 +565,6 @@ function renderPreviewFile(path) {
   els.preview.appendChild(card);
 }
 
-function renderScenePreview(preview) {
-  clearChildren(els.preview);
-  const groups = [];
-  groups.push(...(preview.groups.references || []).map((item) => ({ ...item, group: "参考媒体" })));
-  for (const shot of preview.groups.storyboard || []) {
-    for (const ref of shot.references || []) {
-      groups.push({ ...ref, group: `分镜 ${shot.title}` });
-    }
-  }
-
-  if (!groups.length) {
-    renderPreviewPlaceholder("该场次暂无媒体文件。");
-    return;
-  }
-
-  for (const entry of groups) {
-    const card = document.createElement("article");
-    card.className = "preview-card";
-    const title = document.createElement("h4");
-    title.textContent = `${entry.group} · ${entry.title}`;
-    card.appendChild(title);
-    const src = fileQueryPath(entry.path);
-    if (entry.mediaType === "image") {
-      const img = document.createElement("img");
-      img.src = src;
-      card.appendChild(img);
-    } else if (entry.mediaType === "video") {
-      const video = document.createElement("video");
-      video.controls = true;
-      video.src = src;
-      card.appendChild(video);
-    } else if (entry.mediaType === "audio") {
-      const audio = document.createElement("audio");
-      audio.controls = true;
-      audio.src = src;
-      card.appendChild(audio);
-    } else {
-      const unsupported = document.createElement("p");
-      unsupported.className = "unsupported";
-      unsupported.textContent = entry.fallbackMessage || "不支持该文件类型。";
-      card.appendChild(unsupported);
-    }
-    els.preview.appendChild(card);
-  }
-}
-
 async function openDocument(path) {
   const doc = await api(`/api/document?path=${encodeURIComponent(path)}`);
   state.activeDocumentPath = path;
@@ -308,27 +575,29 @@ async function openDocument(path) {
   els.editor.value = doc.content;
   els.editor.disabled = false;
   els.saveStatus.textContent = "";
+
+  await refreshScenePreviewForDocument(path).catch(() => {
+    state.activeScenePreview = null;
+  });
+  renderActiveDocumentPreview();
 }
 
 async function openPath(path) {
   state.selectedPath = path;
   if (path.endsWith(".md")) {
     await openDocument(path);
-    const sceneInfo = sceneInfoFromPath(path);
-    if (sceneInfo) {
-      const preview = await api(`/api/preview?sceneDocPath=${encodeURIComponent(path)}&limit=40`);
-      renderScenePreview(preview);
-      return;
-    }
-    renderPreviewPlaceholder("已打开文档。若是场次文档会显示媒体预览。");
     return;
   }
 
   state.activeDocumentPath = "";
   state.activeDocumentContent = "";
+  state.activeScenePreview = null;
+  state.lastAssetId = "";
   els.editor.value = "";
   els.editor.disabled = true;
   els.documentPath.textContent = "未选中文档";
+  els.saveStatus.textContent = "";
+  els.editorDropOverlay.classList.add("hidden");
 
   if (/\.(png|jpg|jpeg|webp|gif|mp4|mov|webm|mp3|wav|m4a)$/i.test(path)) {
     renderPreviewFile(path);
@@ -472,18 +741,36 @@ function insertAssetReference() {
   const head = els.editor.value.slice(0, start);
   const tail = els.editor.value.slice(end);
   els.editor.value = `${head}${token}${tail}`;
+  state.activeDocumentContent = els.editor.value;
   els.editor.focus();
   els.editor.selectionStart = els.editor.selectionEnd = start + token.length;
+  renderActiveDocumentPreview();
 }
 
 async function toBase64(file) {
-  const buffer = await file.arrayBuffer();
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const raw = String(reader.result || "");
+      const commaIndex = raw.indexOf(",");
+      resolve(commaIndex >= 0 ? raw.slice(commaIndex + 1) : raw);
+    });
+    reader.addEventListener("error", () => {
+      reject(new Error(`读取文件失败：${file.name}`));
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
+async function filesToPayload(files) {
+  const payload = [];
+  for (const file of files) {
+    payload.push({
+      name: file.name,
+      base64: await toBase64(file),
+    });
   }
-  return btoa(binary);
+  return payload;
 }
 
 async function handleDrop(event) {
@@ -505,13 +792,7 @@ async function handleDrop(event) {
     return;
   }
 
-  const payloadFiles = [];
-  for (const file of files) {
-    payloadFiles.push({
-      name: file.name,
-      base64: await toBase64(file),
-    });
-  }
+  const payloadFiles = await filesToPayload(files);
 
   const result = await api("/api/workspace/ingest-upload", {
     method: "POST",
@@ -530,22 +811,107 @@ async function handleDrop(event) {
   }
 }
 
+async function handleEditorDrop(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  els.editorDropOverlay.classList.add("hidden");
+
+  if (!state.projectRoot) {
+    showToast("请先打开项目。", "warn");
+    return;
+  }
+  if (!state.activeDocumentPath) {
+    showToast("请先打开一个 Markdown 文档。", "warn");
+    return;
+  }
+
+  const files = [...(event.dataTransfer?.files || [])];
+  if (!files.length) {
+    return;
+  }
+
+  const payloadFiles = await filesToPayload(files);
+  const result = await api("/api/document/ingest", {
+    method: "POST",
+    body: {
+      projectRoot: state.projectRoot,
+      docPath: state.activeDocumentPath,
+      mode: "copy",
+      files: payloadFiles,
+    },
+  });
+
+  state.activeDocumentContent = result.content;
+  state.lastAssetId = parseAssetId(result.content);
+  els.editor.value = result.content;
+  els.saveStatus.textContent = `已导入 · ${result.updatedAt}`;
+
+  await refreshScenePreviewForDocument(state.activeDocumentPath).catch(() => {
+    state.activeScenePreview = null;
+  });
+  renderActiveDocumentPreview();
+  await loadTree();
+  showToast(`已导入 ${result.summary.completed} 个文件，失败 ${result.summary.failed}`);
+}
+
 function bindDragAndDrop() {
-  ["dragenter", "dragover"].forEach((eventName) => {
-    els.treePanel.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      els.dropOverlay.classList.remove("hidden");
-    });
+  let treeDragDepth = 0;
+  let editorDragDepth = 0;
+
+  els.treePanel.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    treeDragDepth += 1;
+    els.dropOverlay.classList.remove("hidden");
+  });
+  els.treePanel.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    els.dropOverlay.classList.remove("hidden");
   });
 
   ["dragleave", "dragend"].forEach((eventName) => {
     els.treePanel.addEventListener(eventName, () => {
-      els.dropOverlay.classList.add("hidden");
+      treeDragDepth = Math.max(0, treeDragDepth - 1);
+      if (treeDragDepth === 0) {
+        els.dropOverlay.classList.add("hidden");
+      }
     });
   });
 
   els.treePanel.addEventListener("drop", (event) => {
+    treeDragDepth = 0;
     handleDrop(event).catch((error) => {
+      showToast(error.message, "error");
+    });
+  });
+
+  els.editorPanel.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    editorDragDepth += 1;
+    if (state.activeDocumentPath) {
+      els.editorDropOverlay.classList.remove("hidden");
+    }
+  });
+  els.editorPanel.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.activeDocumentPath) {
+      els.editorDropOverlay.classList.remove("hidden");
+    }
+  });
+
+  ["dragleave", "dragend"].forEach((eventName) => {
+    els.editorPanel.addEventListener(eventName, () => {
+      editorDragDepth = Math.max(0, editorDragDepth - 1);
+      if (editorDragDepth === 0) {
+        els.editorDropOverlay.classList.add("hidden");
+      }
+    });
+  });
+
+  els.editorPanel.addEventListener("drop", (event) => {
+    editorDragDepth = 0;
+    handleEditorDrop(event).catch((error) => {
       showToast(error.message, "error");
     });
   });
@@ -616,6 +982,14 @@ function bindEvents() {
   );
   els.insertAssetLinkButton.addEventListener("click", () => {
     insertAssetReference();
+  });
+  els.editor.addEventListener("input", () => {
+    if (!state.activeDocumentPath) {
+      return;
+    }
+    state.activeDocumentContent = els.editor.value;
+    state.lastAssetId = parseAssetId(els.editor.value);
+    renderActiveDocumentPreview();
   });
   els.searchInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
