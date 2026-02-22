@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Story Me Workspace</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="background-glow"></div>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">SM</span>
+          <div>
+            <h1>Story Me Workspace</h1>
+            <p>本地单人创作工作台</p>
+          </div>
+        </div>
+        <div class="project-controls">
+          <input id="project-root-input" type="text" placeholder="/path/to/project" />
+          <select id="project-type-select">
+            <option value="script-single">script-single</option>
+            <option value="script-series">script-series</option>
+          </select>
+          <button id="open-project-btn">打开项目</button>
+          <button id="init-project-btn" class="secondary">初始化项目</button>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <label class="toggle">
+          <input id="advanced-mode-toggle" type="checkbox" />
+          <span>高级文件视图</span>
+        </label>
+        <div class="search-wrap">
+          <input id="search-input" type="text" placeholder="搜索剧本或资产内容..." />
+          <button id="search-btn" class="secondary">搜索</button>
+        </div>
+      </section>
+
+      <main class="workspace-grid">
+        <aside class="panel tree-panel">
+          <div class="panel-header">
+            <h2>工作区</h2>
+            <div class="actions">
+              <button id="create-episode-btn" class="secondary">新建EP</button>
+              <button id="create-asset-btn" class="secondary">新建资产</button>
+            </div>
+          </div>
+          <div id="drop-overlay" class="drop-overlay hidden">拖拽文件到可导入节点</div>
+          <div id="tree-root" class="tree-root"></div>
+        </aside>
+
+        <section class="panel editor-panel">
+          <div class="panel-header">
+            <h2>文档编辑</h2>
+            <div class="actions">
+              <button id="insert-asset-link-btn" class="secondary">插入资产引用</button>
+              <button id="save-doc-btn">保存</button>
+            </div>
+          </div>
+          <div id="document-path" class="meta-line">未选中文档</div>
+          <textarea id="editor-textarea" placeholder="选择 Markdown 文档后可编辑..." disabled></textarea>
+          <div id="save-status" class="meta-line"></div>
+        </section>
+
+        <aside class="panel preview-panel">
+          <div class="panel-header">
+            <h2>预览</h2>
+          </div>
+          <div id="preview-content" class="preview-content">
+            <p class="placeholder">选择场次文档或媒体文件后预览显示在这里。</p>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

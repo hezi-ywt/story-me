@@ -1,0 +1,14 @@
+{
+  "name": "story-me",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "storyme": "src/cli/main.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "cli": "node src/cli/main.js",
+    "ui": "node src/ui-server/main.js"
+  }
+}
